@@ -54,7 +54,14 @@ mod js {
         "{this.stack.pop();}"
     }
     fn replace_with(id: u32, n: u16) {
-        "{const root = this.nodes[$id$]; let els = this.stack.splice(this.stack.length-$n$); if (root.listening) { this.removeAllNonBubblingListeners(root); } root.replaceWith(...els);}"
+        "{
+            let node = this.nodes[$id$];
+            let els = this.stack.splice(this.stack.length-$n$);
+            if (node.listening) {
+                this.removeAllNonBubblingListeners(node);
+            }
+            node.replaceWith(...els);
+        }"
     }
     fn insert_after(id: u32, n: u16) {
         "{this.nodes[$id$].after(...this.stack.splice(this.stack.length-$n$));}"
@@ -75,12 +82,12 @@ mod js {
         "{let node = document.createElement('pre'); node.hidden = true; this.stack.push(node); this.nodes[$id$] = node;}"
     }
     fn new_event_listener(event_name: &str<u8, evt>, id: u32, bubbles: u8) {
-        r#"
+        r#"{
             let node = this.nodes[id];
             if(node.listening){node.listening += 1;}else{node.listening = 1;}
             node.setAttribute('data-dioxus-id', `\${id}`);
             this.createListener($event_name$, node, $bubbles$);
-        "#
+        }"#
     }
     fn remove_event_listener(event_name: &str<u8, evt>, id: u32, bubbles: u8) {
         "{let node = this.nodes[$id$]; node.listening -= 1; node.removeAttribute('data-dioxus-id'); this.removeListener(node, $event_name$, $bubbles$);}"
@@ -181,31 +188,34 @@ mod js {
     #[cfg(feature = "binary-protocol")]
     fn foreign_event_listener(event: &str<u8, evt>, id: u32, bubbles: u8) {
         r#"
-    bubbles = bubbles == 1;
-    let this_node = this.nodes[id];
-    if(this_node.listening){
-        this_node.listening += 1;
-    } else {
-        this_node.listening = 1;
-    }
-    this_node.setAttribute('data-dioxus-id', `\${id}`);
-    const event_name = $event$;
+        {
+            bubbles = bubbles == 1;
+            let this_node = this.nodes[id];
+            if (this_node.listening){
+                this_node.listening += 1;
+            } else {
+                this_node.listening = 1;
+            }
+            this_node.setAttribute('data-dioxus-id', `\${id}`);
+            const event_name = $event$;
 
-    // if this is a mounted listener, we send the event immediately
-    if (event_name === "mounted") {
-        window.ipc.postMessage(
-            this.serializeIpcMessage("user_event", {
-                name: event_name,
-                element: id,
-                data: null,
-                bubbles,
-            })
-        );
-    } else {
-        this.createListener(event_name, this_node, bubbles, (event) => {
-            this.handler(event, event_name, bubbles);
-        });
-    }"#
+            // if this is a mounted listener, we send the event immediately
+            if (event_name === "mounted") {
+                window.ipc.postMessage(
+                    this.serializeIpcMessage("user_event", {
+                        name: event_name,
+                        element: id,
+                        data: null,
+                        bubbles,
+                    })
+                );
+            } else {
+                this.createListener(event_name, this_node, bubbles, (event) => {
+                    this.handler(event, event_name, bubbles);
+                });
+            }
+        }
+    "#
     }
 
     /// Assign the ID
