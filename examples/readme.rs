@@ -12,11 +12,14 @@ fn main() {
 }
 
 fn app() -> Element {
-    let mut count = use_signal(|| 0);
+    let mut data = use_signal(|| false);
 
-    rsx! {
-        h1 { "High-Five counter: {count}" }
-        button { onclick: move |_| count += 1, "Up high!" }
-        button { onclick: move |_| count -= 1, "Down low!" }
+    if data() {
+        println!("RAN1");
+        rsx!("true")
+    } else {
+        println!("RAN2");
+        data.set(true);
+        rsx!("false")
     }
 }
