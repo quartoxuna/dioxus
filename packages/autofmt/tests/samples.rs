@@ -46,4 +46,9 @@ twoway![
     tinynoopt,
     trailing_expr,
     many_exprs,
+    shorthand,
+    docsite,
+    letsome,
+    fat_exprs,
+    nested,
 ];

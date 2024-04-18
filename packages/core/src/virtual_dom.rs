@@ -138,7 +138,7 @@ use tracing::instrument;
 ///
 /// let dom = VirtualDom::new(app);
 ///
-/// real_dom.apply(dom.rebuild());
+/// dom.rebuild(real_dom.apply());
 ///
 /// loop {
 ///     select! {
@@ -258,7 +258,7 @@ impl VirtualDom {
     ///
     /// ```rust, ignore
     /// let mut dom = VirtualDom::new_with_props(Example, SomeProps { name: "jane" });
-    /// let mutations = dom.rebuild();
+    /// dom.rebuild_in_place();
     /// ```
     pub fn new_with_props<P: Clone + 'static, M: 'static>(
         root: impl ComponentFunction<P, M>,
@@ -302,7 +302,7 @@ impl VirtualDom {
     ///
     /// ```rust, ignore
     /// let mut dom = VirtualDom::new_from_root(VComponent::new(Example, SomeProps { name: "jane" }, "Example"));
-    /// let mutations = dom.rebuild();
+    /// dom.rebuild(to_writer);
     /// ```
     #[instrument(skip(root), level = "trace", name = "VirtualDom::new")]
     pub(crate) fn new_with_component(root: impl AnyProps + 'static) -> Self {
@@ -359,6 +359,11 @@ impl VirtualDom {
     pub fn with_root_context<T: Clone + 'static>(self, context: T) -> Self {
         self.base_scope().state().provide_context(context);
         self
+    }
+
+    /// Provide a context to the root scope
+    pub fn provide_root_context<T: Clone + 'static>(&self, context: T) {
+        self.base_scope().state().provide_context(context);
     }
 
     /// Build the virtualdom with a global context inserted into the base scope
@@ -512,12 +517,17 @@ impl VirtualDom {
         // We choose not to poll the deadline since we complete pretty quickly anyways
         while let Some(task) = self.pop_task() {
             // Then poll any tasks that might be pending
-            let tasks = task.tasks_queued.into_inner();
-            for task in tasks {
+            let mut tasks = task.tasks_queued.into_inner();
+            while let Some(task) = tasks.pop_front() {
                 let _ = self.runtime.handle_task_wakeup(task);
+
                 // Running that task, may mark a scope higher up as dirty. If it does, return from the function early
                 self.queue_events();
                 if self.has_dirty_scopes() {
+                    // requeue any remaining tasks
+                    for task in tasks {
+                        self.mark_task_dirty(task);
+                    }
                     return;
                 }
             }
@@ -601,9 +611,7 @@ impl VirtualDom {
     /// static app: Component = |cx|  rsx!{ "hello world" };
     ///
     /// let mut dom = VirtualDom::new();
-    /// let edits = dom.rebuild();
-    ///
-    /// apply_edits(edits);
+    /// dom.rebuild(to_writer);
     /// ```
     #[instrument(skip(self, to), level = "trace", name = "VirtualDom::rebuild")]
     pub fn rebuild(&mut self, to: &mut impl WriteMutations) {
@@ -633,10 +641,14 @@ impl VirtualDom {
         while let Some(work) = self.pop_work() {
             {
                 let _runtime = RuntimeGuard::new(self.runtime.clone());
+
                 // Then, poll any tasks that might be pending in the scope
                 for task in work.tasks {
                     let _ = self.runtime.handle_task_wakeup(task);
                 }
+
+                self.queue_events();
+
                 // If the scope is dirty, run the scope and get the mutations
                 if work.rerun_scope {
                     let new_nodes = self.run_scope(work.scope.id);
@@ -688,7 +700,7 @@ impl VirtualDom {
                     while let Some(task) = self.pop_task() {
                         // Then poll any tasks that might be pending
                         let mut tasks = task.tasks_queued.into_inner();
-                        while let Some(task) = tasks.pop() {
+                        while let Some(task) = tasks.pop_front() {
                             if self.runtime.task_runs_during_suspense(task) {
                                 let _ = self.runtime.handle_task_wakeup(task);
                                 // Running that task, may mark a scope higher up as dirty. If it does, return from the function early
@@ -718,6 +730,9 @@ impl VirtualDom {
                         let _ = self.runtime.handle_task_wakeup(task);
                     }
                 }
+
+                self.queue_events();
+
                 // If the scope is dirty, run the scope and get the mutations
                 if work.rerun_scope {
                     let new_nodes = self.run_scope(work.scope.id);

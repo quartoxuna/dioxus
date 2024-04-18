@@ -28,6 +28,7 @@ impl Writer<'_> {
             children,
             manual_props,
             prop_gen_args,
+            key,
             ..
         }: &Component,
     ) -> Result {
@@ -38,7 +39,7 @@ impl Writer<'_> {
         let mut opt_level = ShortOptimization::NoOpt;
 
         // check if we have a lot of attributes
-        let attr_len = self.field_len(fields, manual_props);
+        let attr_len = self.field_len(fields, manual_props) + self.key_len(key.as_ref());
         let is_short_attr_list = attr_len < 80;
         let is_small_children = self.is_short_children(children).is_some();
 
@@ -62,7 +63,7 @@ impl Writer<'_> {
         }
 
         // If there's nothing at all, empty optimization
-        if fields.is_empty() && children.is_empty() && manual_props.is_none() {
+        if fields.is_empty() && children.is_empty() && manual_props.is_none() && key.is_none() {
             opt_level = ShortOptimization::Empty;
         }
 
@@ -85,14 +86,17 @@ impl Writer<'_> {
             ShortOptimization::Oneliner => {
                 write!(self.out, " ")?;
 
-                self.write_component_fields(fields, manual_props, true)?;
+                self.write_component_fields(fields, key.as_ref(), manual_props, true)?;
 
                 if !children.is_empty() && !fields.is_empty() {
                     write!(self.out, ", ")?;
                 }
 
-                for child in children {
+                for (id, child) in children.iter().enumerate() {
                     self.write_ident(child)?;
+                    if id != children.len() - 1 && children.len() > 1 {
+                        write!(self.out, ", ")?;
+                    }
                 }
 
                 write!(self.out, " ")?;
@@ -100,7 +104,7 @@ impl Writer<'_> {
 
             ShortOptimization::PropsOnTop => {
                 write!(self.out, " ")?;
-                self.write_component_fields(fields, manual_props, true)?;
+                self.write_component_fields(fields, key.as_ref(), manual_props, true)?;
 
                 if !children.is_empty() && !fields.is_empty() {
                     write!(self.out, ",")?;
@@ -111,7 +115,7 @@ impl Writer<'_> {
             }
 
             ShortOptimization::NoOpt => {
-                self.write_component_fields(fields, manual_props, false)?;
+                self.write_component_fields(fields, key.as_ref(), manual_props, false)?;
 
                 if !children.is_empty() && !fields.is_empty() {
                     write!(self.out, ",")?;
@@ -151,10 +155,22 @@ impl Writer<'_> {
     fn write_component_fields(
         &mut self,
         fields: &[ComponentField],
+        key: Option<&IfmtInput>,
         manual_props: &Option<syn::Expr>,
         sameline: bool,
     ) -> Result {
         let mut field_iter = fields.iter().peekable();
+
+        // write the key
+        if let Some(key) = key {
+            write!(self.out, "key: {}", ifmt_to_string(key))?;
+            if !fields.is_empty() {
+                write!(self.out, ",")?;
+                if sameline {
+                    write!(self.out, " ")?;
+                }
+            }
+        }
 
         while let Some(field) = field_iter.next() {
             if !sameline {
@@ -163,8 +179,12 @@ impl Writer<'_> {
 
             let name = &field.name;
             match &field.content {
+                ContentField::ManExpr(_exp) if field.can_be_shorthand() => {
+                    write!(self.out, "{name}")?;
+                }
+
                 ContentField::ManExpr(exp) => {
-                    let out = unparse_expr(exp);
+                    let out = self.unparse_expr(exp);
                     let mut lines = out.split('\n').peekable();
                     let first = lines.next().unwrap();
                     write!(self.out, "{name}: {first}")?;
@@ -174,6 +194,7 @@ impl Writer<'_> {
                         write!(self.out, "{line}")?;
                     }
                 }
+
                 ContentField::Formatted(s) => {
                     write!(
                         self.out,
@@ -253,7 +274,7 @@ impl Writer<'_> {
         We want to normalize the expr to the appropriate indent level.
         */
 
-        let formatted = unparse_expr(exp);
+        let formatted = self.unparse_expr(exp);
 
         let mut lines = formatted.lines();
 
